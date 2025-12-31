@@ -163,6 +163,10 @@ def install_package(package: Package, skip_installed: bool) -> None:
     if package.commit:
         git(["checkout", "-q", package.commit], cwd=package.repo_cache())
 
+    if not source_path.exists():
+        log.error("Package %s does not exist in repository; skipping", package.name())
+        return
+
     # Copy package files to config directory
     verb = "Updating" if target_path.exists() else "Installing"
     log.info("%s package %s", verb, package.name())
