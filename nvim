@@ -18,7 +18,9 @@ run_vim() {
         && [[ "$TERM" == xterm-kitty ]] \
         && (( ${VIM_FORK:-1} == 1 ))
     then
-        kitty @ launch --type tab --no-response --cwd current "$VIMBIN" "$@"
+        # Pass in PATH explicitly for cases where Kitty was started from an
+        # environment that didn't read .profile, like on macOS
+        kitty @ launch --type tab --no-response --cwd current --env PATH="$PATH" "$VIMBIN" "$@"
     else
         command $VIMBIN "$@"
     fi
