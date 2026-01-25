@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# Take a PDF that was produced by first scanning all of the odd pages
+# and then all of the even pages of a stack of paper,
+# and reorder the pages to produce a fixed PDF
+# with all pages in the correct order.
+
+set -eEu -o pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+PS4='+\t '
+
+error_handler() { echo "Error: Line ${1} exited with status ${2}"; }
+trap 'error_handler ${LINENO} $?' ERR
+
+[[ "${TRACE:-0}" == "1" ]] && set -x
+
+
+if (( $# != 1 )); then
+    echo "usage: $(basename "$0") <input.pdf>" >&2
+    exit 1
+fi
+
+INPUT="$1"
+OUTPUT="${1%.pdf}-fixed.pdf"
+
+num_pages="$(pdftk "$INPUT" dump_data output - | awk '/NumberOfPages/ { print $2 }')"
+middle=$(( num_pages / 2 ))
+if (( num_pages % 2 != 0 )); then
+    (( middle += 1 ))
+fi
+
+pdftk A="$INPUT" shuffle A1-${middle} Aend-$(( middle + 1 )) output "$OUTPUT"
