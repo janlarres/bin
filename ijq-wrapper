@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -eEu -o pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+PS4='+\t '
+
+error_handler() { echo "Error: Line ${1} exited with status ${2}"; }
+trap 'error_handler ${LINENO} $?' ERR
+
+[[ "${TRACE:-0}" == "1" ]] && set -x
+
+
+TMPFILE=$(mktemp -t ijq-wrapper.XXXXXX)
+trap 'rm "$TMPFILE"' EXIT
+
+if (( $# > 0 )); then
+    ijq "$1" > "$TMPFILE" 2>&1
+else
+    ijq > "$TMPFILE" 2>&1
+fi
+
+nvim "$TMPFILE"
