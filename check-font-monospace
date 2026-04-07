@@ -1,0 +1,63 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# dependencies = [
+#   "fonttools",
+# ]
+# ///
+#
+# ruff: noqa: N806
+
+import argparse
+import sys
+
+from fontTools.ttLib import TTFont
+
+
+def main(args: argparse.Namespace) -> int:
+    font = TTFont(args.font)
+
+    check_width(font)
+
+    if font.has_key("post"):
+        print(f"isfixedPitch(post) = {font['post'].isFixedPitch}")
+    if font.has_key("CFF "):
+        print(f"isfixedPitch(CFF) = {font['CFF '].cff.values()[0].isFixedPitch}")
+
+    return 0
+
+
+def check_width(font: TTFont) -> None:
+    codepoint_I = ord("I")
+    codepoint_M = ord("M")
+    glyphid_I = None
+    glyphid_M = None
+    for table in font["cmap"].tables:
+        for codepoint, glyphid in table.cmap.items():
+            if codepoint == codepoint_I:
+                glyphid_I = glyphid
+                if glyphid_M:
+                    break
+            elif codepoint == codepoint_M:
+                glyphid_M = glyphid
+                if glyphid_I:
+                    break
+
+    if (not glyphid_I) or (not glyphid_M):
+        print("Non-alphabetic font")
+        return
+
+    glyphs = font.getGlyphSet()
+    I = glyphs[glyphid_I]  # noqa: E741
+    M = glyphs[glyphid_M]
+    print(f"width(I) {'==' if I.width == M.width else '!='} width(M)")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Show whether a font is monospace")
+    parser.add_argument("font", help="the font to check")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    sys.exit(main(parse_args()))
