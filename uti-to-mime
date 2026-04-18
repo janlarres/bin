@@ -4,18 +4,23 @@
 #
 # /// script
 # dependencies = [
-#     "pyobjc-framework-UniformTypeIdentifiers",
+#     "pyobjc-framework-UniformTypeIdentifiers; sys_platform=='darwin'",
 # ]
 # ///
 
 
 import argparse
 import sys
-
-from UniformTypeIdentifiers import UTType
+from pathlib import Path
 
 
 def main(args: argparse.Namespace) -> int:
+    if sys.platform != "darwin":
+        print(f"{Path(sys.argv[0]).name}: only supported on macOS", file=sys.stderr)
+        return 1
+
+    from UniformTypeIdentifiers import UTType
+
     uti = args.uti if sys.stdin.isatty() else sys.stdin.read().strip()
     ut_type = UTType.typeWithIdentifier_(uti)
     print(ut_type.preferredMIMEType())
