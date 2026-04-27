@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -eEu -o pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+PS4="$BASH_SOURCE:"'+\t '
+
+trap 'echo "$0: Error on line ${LINENO}: $BASH_COMMAND" >&2' ERR
+
+[[ "${TRACE:-0}" == "1" ]] && set -x
+
+
+ORIG_FILE="$1"
+
+BASENAME="${ORIG_FILE%.*}"
+EXT="${ORIG_FILE##*.}"
+TARGET_FILE="$BASENAME-shadow.$EXT"
+
+magick "$ORIG_FILE" \
+    \( +clone -background black -shadow 50x15+0+10 \) \
+    +swap \
+    -background white \
+    -layers merge \
+    +repage \
+    "$TARGET_FILE"
