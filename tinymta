@@ -2,6 +2,10 @@
 # Author: Jan Larres <jan@majutsushi.net>
 # License: MIT/X11
 #
+# /// script
+# requires-python = ">=3.11"
+# ///
+#
 # Extremely simple MTA that accepts local mail by simulating a sendmail binary
 # and forwards it to a real mail server. Heavily inspired by ssmtp.
 #
@@ -11,7 +15,9 @@
 # - /usr/bin/mailq
 # - /usr/bin/newaliases
 #
-# Example config file (TOML format) (/etc/tinymta):
+# Run `tinymta -q` in a cron job or similar to try sending queued mails again.
+#
+# Example config file (/etc/tinymta.toml):
 #
 # recipient = "foo@example.com"
 # smarthost = "mail.example.com"
@@ -28,9 +34,11 @@ import pwd
 import socket
 import sys
 import syslog
+import uuid
 from dataclasses import dataclass
+from email.utils import make_msgid
 from pathlib import Path
-from smtplib import SMTP_SSL
+from smtplib import SMTP_SSL, SMTPException
 from typing import TYPE_CHECKING, Any
 
 import tomllib
@@ -38,6 +46,8 @@ import tomllib
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from email.message import Message
+
+SPOOL = Path("/var/spool/tinymta")
 
 
 @dataclass
@@ -96,15 +106,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-F", dest="fullname")
     parser.add_argument("-f", "-r", dest="fromaddr")
     parser.add_argument("-d", "--debug", action="store_true", default=False)
+    parser.add_argument("-bp", action="store_true", default=False)
+    parser.add_argument("-q", nargs="?", default=argparse.SUPPRESS)
 
     for arg in unsupported_args:
         parser.add_argument("-" + arg, action=UnsupportedAction, nargs=0)
     for [arg, nargs] in ignored_args:
         parser.add_argument("-" + arg, action=IgnoredAction, nargs=nargs)
-
-    # simulated args
-    parser.add_argument("-bp", action="store_true", default=False)
-    parser.add_argument("-q", nargs="?", default=argparse.SUPPRESS)
 
     return parser.parse_args()
 
@@ -141,15 +149,13 @@ def send_message(
     msg: Message,
     rcpts: list[str],
     fromaddr: str | None,
+    config: Config,
     debug: bool,
 ) -> None:
     syslog.openlog(ident="tinymta", facility=syslog.LOG_MAIL)
 
     # Get user info from passwd file
     pw = pwd.getpwuid(os.getuid())
-
-    with Path("/etc/tinymta").open("rb") as f:
-        config = Config(**tomllib.load(f))
 
     # Construct a "From" header from explicit argument, existing header,
     # or username
@@ -171,7 +177,61 @@ def send_message(
     if msg.get("Date") is None:
         msg.add_header("Date", email.utils.formatdate(localtime=True))
 
+    if "Message-ID" in msg:
+        msg.replace_header("Message-ID", make_msgid())
+    else:
+        msg.add_header("Message-ID", make_msgid())
+
     # Send the mail
+    try:
+        do_send(msg, config, debug)
+    except SMTPException as e:
+        syslog.syslog(syslog.LOG_ERR, f"Error sending mail, queuing: {e}")
+        SPOOL.mkdir(0o770, parents=True, exist_ok=True)
+        msg_file = SPOOL / (uuid.uuid4().hex + ".msg")
+        tmp_file = msg_file.parent / (msg_file.name + ".tmp")
+        tmp_file.write_text(msg.as_string())
+        tmp_file.rename(msg_file)
+
+
+def list_queue() -> None:
+    for file in SPOOL.glob("*.msg"):
+        with file.open() as f:
+            msg = email.message_from_file(f)
+        print(
+            f"""{file.name}:
+    Subject: {msg.get("Subject")}
+    From: {msg.get("From")}
+    To: {msg.get("To")}
+""".strip()
+        )
+
+
+def process_queue(config: Config, debug: bool) -> None:
+    lockfile = SPOOL / "queue.lock"
+    try:
+        lockfile.touch(mode=0o660, exist_ok=False)
+    except FileExistsError:
+        syslog.syslog(syslog.LOG_WARNING, "Queue process already running; exiting")
+        return
+
+    try:
+        for file in SPOOL.glob("*.msg"):
+            with file.open() as f:
+                msg = email.message_from_file(f)
+            try:
+                do_send(msg, config, debug)
+                file.unlink()
+            except SMTPException as e:
+                syslog.syslog(
+                    syslog.LOG_ERR, f"Error sending mail, leaving in queue: {e}"
+                )
+                return
+    finally:
+        lockfile.unlink()
+
+
+def do_send(msg: Message, config: Config, debug: bool) -> None:
     with SMTP_SSL(config.smarthost) as smtp:
         if debug:
             smtp.set_debuglevel(1)
@@ -181,18 +241,25 @@ def send_message(
         # considered invalid by the smarthost (like GMail)
         smtp.send_message(msg, from_addr=config.recipient, to_addrs=config.recipient)
 
-    syslog.syslog(
-        syslog.LOG_INFO, f"Sent mail with subject '{msg.get('Subject')}' to {rcpts}"
-    )
+        syslog.syslog(
+            syslog.LOG_INFO,
+            f"Sent mail with subject '{msg.get('Subject')}' to {msg.get('To')}",
+        )
 
 
 # Main function
 def main(args: argparse.Namespace) -> None:
+    with Path("/etc/tinymta.toml").open("rb") as f:
+        config = Config(**tomllib.load(f))
+
     name = Path(sys.argv[0]).name
 
-    # Simulate the "mailq" and "newaliases" commands
-    if name == "mailq" or args.bp or "q" in args:
-        exit_success(f"{name}: Mail queue is empty")
+    if name == "mailq" or args.bp:
+        list_queue()
+        return
+    if "q" in args:
+        process_queue(config, args.debug)
+        return
     if name == "newaliases":
         exit_success(f"{name}: Aliases are not used in tinymta")
 
@@ -200,7 +267,7 @@ def main(args: argparse.Namespace) -> None:
     msg = email.message_from_bytes(sys.stdin.buffer.read())
 
     try:
-        send_message(msg, args.rcpts, args.fromaddr, args.debug)
+        send_message(msg, args.rcpts, args.fromaddr, config, args.debug)
     except Exception as e:
         if sys.stdin.isatty():
             raise
