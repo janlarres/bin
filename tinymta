@@ -64,6 +64,7 @@ ignored_args = [
     ("bi", 0),
     ("bm", 0),
     ("E", 0),
+    ("F", 1),
     ("h", 1),
     ("i", 0),
     ("m", 0),
@@ -80,12 +81,13 @@ ignored_args = [
 class UnsupportedAction(argparse.Action):
     def __call__(
         self,
-        _parser: argparse.ArgumentParser,
-        _namespace: argparse.Namespace,
-        _values: str | Sequence[Any] | None,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
         option_string: str | None = None,
     ) -> None:
-        print(f"{option_string} option not supported")
+        del parser, namespace, values
+        print(f"{option_string} option not supported", file=sys.stderr)
         sys.exit(1)
 
 
@@ -129,18 +131,40 @@ def main(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="tinymta", add_help=False)
-    parser.add_argument("rcpts", nargs="*")
-    parser.add_argument("-F", dest="fullname")
-    parser.add_argument("-f", "-r", dest="fromaddr")
-    parser.add_argument("-d", "--debug", action="store_true", default=False)
-    parser.add_argument("-bp", action="store_true", default=False)
-    parser.add_argument("-q", nargs="?", default=argparse.SUPPRESS)
+    parser = argparse.ArgumentParser(
+        description="Tiny MTA that forwards mail to a real mail server", add_help=False
+    )
+    parser.add_argument("rcpts", nargs="*", help="recipients")
+    parser.add_argument("-f", "-r", dest="fromaddr", help="envelope sender address")
+    parser.add_argument(
+        "-d", "--debug", action="store_true", default=False, help="enable debug logging"
+    )
+    parser.add_argument(
+        "-bp", action="store_true", default=False, help="list the mail queue"
+    )
+    parser.add_argument(
+        "-q",
+        nargs="?",
+        default=argparse.SUPPRESS,
+        help="attempt to deliver all queued mail",
+    )
 
     for arg in unsupported_args:
-        parser.add_argument("-" + arg, action=UnsupportedAction, nargs=0)
+        parser.add_argument(
+            "-" + arg, action=UnsupportedAction, nargs=0, help="unsupported"
+        )
     for [arg, nargs] in ignored_args:
-        parser.add_argument("-" + arg, action=IgnoredAction, nargs=nargs)
+        parser.add_argument(
+            "-" + arg, action=IgnoredAction, nargs=nargs, help="ignored"
+        )
+
+    # Add this manually since the default -h conflicts with a compatibility option
+    parser.add_argument(
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="show this help message and exit",
+    )
 
     return parser.parse_args()
 
