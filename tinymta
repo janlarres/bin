@@ -29,11 +29,11 @@ from __future__ import annotations
 import argparse
 import email
 import email.utils
-import os
-import pwd
+import getpass
 import socket
 import sys
 import syslog
+import traceback
 import uuid
 from dataclasses import dataclass
 from email.utils import make_msgid
@@ -117,34 +117,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# Print message and exit successfully
-def exit_success(s: str) -> None:
-    print(s)
-    sys.exit(0)
-
-
-# Log error message to syslog and exit with an error code
-def die(s: str | Exception, msg: Message | None = None) -> None:
-    syslog.syslog(syslog.LOG_WARNING, repr(s))
-
-    if msg is not None:
-        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-        path = home / "dead.letter"
-
-        syslog.syslog(syslog.LOG_WARNING, f"Writing mail to {path}")
-
-        nl = "\n" if path.exists() else ""
-        with path.open("a") as f:
-            f.write(nl)
-            f.write(msg.as_string())
-
-    if isinstance(s, Exception) and sys.stdout.isatty():
-        raise s
-
-    print(str(s))
-    sys.exit(1)
-
-
 def send_message(
     msg: Message,
     rcpts: list[str],
@@ -154,13 +126,12 @@ def send_message(
 ) -> None:
     syslog.openlog(ident="tinymta", facility=syslog.LOG_MAIL)
 
-    # Get user info from passwd file
-    pw = pwd.getpwuid(os.getuid())
+    username = getpass.getuser()
 
     # Construct a "From" header from explicit argument, existing header,
     # or username
     if fromaddr is None:
-        fromaddr = msg.get("From") or pw.pw_name
+        fromaddr = msg.get("From") or username
     if "@" not in fromaddr:
         if Path("/etc/mailname").exists():
             fromaddr += "@" + Path("/etc/mailname").read_text().strip()
@@ -182,11 +153,10 @@ def send_message(
     else:
         msg.add_header("Message-ID", make_msgid())
 
-    # Send the mail
     try:
         do_send(msg, config, debug)
     except SMTPException as e:
-        syslog.syslog(syslog.LOG_ERR, f"Error sending mail, queuing: {e}")
+        syslog.syslog(syslog.LOG_WARNING, f"Error sending mail, queuing: {e}")
         SPOOL.mkdir(0o770, parents=True, exist_ok=True)
         msg_file = SPOOL / (uuid.uuid4().hex + ".msg")
         tmp_file = msg_file.parent / (msg_file.name + ".tmp")
@@ -224,7 +194,7 @@ def process_queue(config: Config, debug: bool) -> None:
                 file.unlink()
             except SMTPException as e:
                 syslog.syslog(
-                    syslog.LOG_ERR, f"Error sending mail, leaving in queue: {e}"
+                    syslog.LOG_WARNING, f"Error sending mail, leaving in queue: {e}"
                 )
                 return
     finally:
@@ -247,7 +217,6 @@ def do_send(msg: Message, config: Config, debug: bool) -> None:
         )
 
 
-# Main function
 def main(args: argparse.Namespace) -> None:
     with Path("/etc/tinymta.toml").open("rb") as f:
         config = Config(**tomllib.load(f))
@@ -256,22 +225,24 @@ def main(args: argparse.Namespace) -> None:
 
     if name == "mailq" or args.bp:
         list_queue()
-        return
-    if "q" in args:
+    elif "q" in args:
         process_queue(config, args.debug)
-        return
-    if name == "newaliases":
-        exit_success(f"{name}: Aliases are not used in tinymta")
+    elif name == "newaliases":
+        print(f"{name}: Aliases are not used in tinymta")
+    else:
+        msg = email.message_from_file(sys.stdin)
+        try:
+            send_message(msg, args.rcpts, args.fromaddr, config, args.debug)
+        except Exception:
+            syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
 
-    # Parse mail passed in through stdin
-    msg = email.message_from_bytes(sys.stdin.buffer.read())
+            path = Path.home() / "dead.letter"
+            syslog.syslog(syslog.LOG_INFO, f"Writing mail to {path}")
+            with path.open("a") as f:
+                f.write("\n" if path.exists() else "")
+                f.write(msg.as_string())
 
-    try:
-        send_message(msg, args.rcpts, args.fromaddr, config, args.debug)
-    except Exception as e:
-        if sys.stdin.isatty():
             raise
-        die(e, msg)
 
 
 if __name__ == "__main__":
