@@ -100,6 +100,34 @@ class IgnoredAction(argparse.Action):
         pass
 
 
+def main(args: argparse.Namespace) -> None:
+    with Path("/etc/tinymta.toml").open("rb") as f:
+        config = Config(**tomllib.load(f))
+
+    name = Path(sys.argv[0]).name
+
+    if name == "mailq" or args.bp:
+        list_queue()
+    elif "q" in args:
+        process_queue(config, args.debug)
+    elif name == "newaliases":
+        print(f"{name}: Aliases are not used in tinymta")
+    else:
+        msg = email.message_from_file(sys.stdin)
+        try:
+            send_message(msg, args.rcpts, args.fromaddr, config, args.debug)
+        except Exception:
+            syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
+
+            path = Path.home() / "dead.letter"
+            syslog.syslog(syslog.LOG_INFO, f"Writing mail to {path}")
+            with path.open("a") as f:
+                f.write("\n" if path.exists() else "")
+                f.write(msg.as_string())
+
+            raise
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="tinymta", add_help=False)
     parser.add_argument("rcpts", nargs="*")
@@ -215,34 +243,6 @@ def do_send(msg: Message, config: Config, debug: bool) -> None:
             syslog.LOG_INFO,
             f"Sent mail with subject '{msg.get('Subject')}' to {msg.get('To')}",
         )
-
-
-def main(args: argparse.Namespace) -> None:
-    with Path("/etc/tinymta.toml").open("rb") as f:
-        config = Config(**tomllib.load(f))
-
-    name = Path(sys.argv[0]).name
-
-    if name == "mailq" or args.bp:
-        list_queue()
-    elif "q" in args:
-        process_queue(config, args.debug)
-    elif name == "newaliases":
-        print(f"{name}: Aliases are not used in tinymta")
-    else:
-        msg = email.message_from_file(sys.stdin)
-        try:
-            send_message(msg, args.rcpts, args.fromaddr, config, args.debug)
-        except Exception:
-            syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
-
-            path = Path.home() / "dead.letter"
-            syslog.syslog(syslog.LOG_INFO, f"Writing mail to {path}")
-            with path.open("a") as f:
-                f.write("\n" if path.exists() else "")
-                f.write(msg.as_string())
-
-            raise
 
 
 if __name__ == "__main__":
