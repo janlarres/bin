@@ -209,7 +209,7 @@ def send_message(
         do_send(msg, config, debug)
     except SMTPException as e:
         syslog.syslog(syslog.LOG_WARNING, f"Error sending mail, queuing: {e}")
-        SPOOL.mkdir(0o770, parents=True, exist_ok=True)
+        ensure_spool()
         msg_file = SPOOL / (uuid.uuid4().hex + ".msg")
         tmp_file = msg_file.parent / (msg_file.name + ".tmp")
         tmp_file.write_text(msg.as_string())
@@ -230,6 +230,7 @@ def list_queue() -> None:
 
 
 def process_queue(config: Config, debug: bool) -> None:
+    ensure_spool()
     lockfile = SPOOL / "queue.lock"
     try:
         lockfile.touch(mode=0o660, exist_ok=False)
@@ -267,6 +268,10 @@ def do_send(msg: Message, config: Config, debug: bool) -> None:
             syslog.LOG_INFO,
             f"Sent mail with subject '{msg.get('Subject')}' to {msg.get('To')}",
         )
+
+
+def ensure_spool() -> None:
+    SPOOL.mkdir(0o770, parents=True, exist_ok=True)
 
 
 if __name__ == "__main__":
