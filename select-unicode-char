@@ -21,10 +21,7 @@ def main() -> int:
     stdin = "\n".join(chars)
 
     try:
-        if os.environ.get("XDG_SESSION_TYPE") == "wayland":
-            cmd = ["fuzzel", "--dmenu"]
-        else:
-            cmd = ["rofi", "-dmenu", "-i"]
+        cmd = ["rofi", "-dmenu", "-i"]
         p = run(
             cmd,
             input=stdin,
