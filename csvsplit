@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+# Author: Jan Larres <jan@janlarres.com>
+# License: MIT/X11
+
+import argparse
+import csv
+import sys
+from pathlib import Path
+
+
+def main(args: argparse.Namespace) -> int:
+    infile = args.file
+
+    with infile.open() as f:
+        reader = csv.DictReader(f)
+        outfile = None
+        outfile_no = 1
+        writer = None
+        try:
+            i = 0
+            for row in reader:
+                if i >= args.lines:
+                    outfile.close()
+                    outfile = None
+                    writer = None
+                    i %= args.lines
+                if outfile is None:
+                    outfile = Path(f"{infile.stem}-{outfile_no:03}.csv").open("w")
+                    outfile_no += 1
+                    writer = csv.DictWriter(outfile, row.keys())
+                    writer.writeheader()
+                writer.writerow(row)
+                i += 1
+        finally:
+            if outfile is not None:
+                outfile.close()
+
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Split a CSV file with a header into smaller ones"
+    )
+    parser.add_argument("file", type=Path, help="the CSV file to split")
+    parser.add_argument(
+        "-l",
+        "--lines",
+        type=int,
+        default=1000,
+        help="maximum number of lines in output files",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    sys.exit(main(parse_args()))
